@@ -1,8 +1,10 @@
 ---
 title: "Childers_Lab3"
 author: "Heather Childers"
-date: 
-output: 
+date: "1/31/2024"
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -22,7 +24,7 @@ The data set provided includes variables related to the sex, physical dimensions
 
 Pull the abalone data from Github and take a look at it.
 
-```{r data}
+```{r data, message=FALSE}
 abdat<- read_csv(file = "https://raw.githubusercontent.com/MaRo406/eds-232-machine-learning/main/data/abalone-data.csv")
 glimpse(abdat)
 
@@ -60,6 +62,8 @@ ridge <- glmnet(
   y = Y, #log transformed data
   alpha = 0 #Specifies ridge or Lasso model, 0 = ridge, 1 = model
 )
+
+plot(ridge, xvar = "lambda")
 ```
 
 ### Using *k*-fold cross validation resampling and tuning our models
@@ -68,14 +72,76 @@ In lecture we learned about two methods of estimating our model's generalization
 
 -   ***Question 4***. This time fit a ridge regression model and a lasso model, both with using cross validation. The glmnet package kindly provides a cv.glmnet() function to do this (similar to the glmnet() function that we just used). Use the alpha argument to control which type of model you are running. Plot the results.
 
+```{r}
+# Apply Cross Validation for a ridge regression model to the Abalone data.
+ridge_cv <- cv.glmnet(
+  x = X,
+  y = Y,
+  alpha = 0
+)
+#Plot the Results
+plot(ridge_cv, main = "Ridge penalty\n\n")
+
+# Apply CV lasso regression to Ames data
+#defualts to ten folds
+lasso_cv <- cv.glmnet(
+  x = X,
+  y = Y,
+  alpha = 1
+)
+#Plot the results
+plot(lasso_cv, main = "Lasso penalty\n\n")
+```
+
 -   ***Question 5***. Interpret the graphs. What is being displayed on the axes here? How does the performance of the models change with the value of lambda?
+
+    -   Both of the above graphs are showing the change in Mean Squared Error as the tuning parameter, lambda, increases. For both models you can see that the mean squared error increases as the log of lambda increases. This makes sense because as lamba increases, the penalty from larger coefficients increases. There are a few interesting things to point out about these graphs:
+
+        1.  The values of lambda for the lasso regression are much smaller than they are for the ridge regression for a relatively similar mean squared error value
+
+        2.  This graphs allow us to see that the mean squared error value will increase almost exponentially for the lasso regression, and the ridge regression shows that the mean squared error will eventually plateau.
 
 -   ***Question 6***. Inspect the ridge model object you created with cv.glmnet(). The \$cvm column shows the MSEs for each CV fold. What is the minimum MSE? What is the value of lambda associated with this MSE minimum?
 
+```{r}
+#Ridge model stats
+# minimum MSE
+min_ridge <- min(ridge_cv$cvm) 
+print(paste("The minimum mean squared error for the ridge regression is",min_ridge))
+# lambda for this min MSE
+lam_ridge <- ridge_cv$lambda.min 
+print(paste("The lambda value for the minimum mean squared error for the ridge regression is",lam_ridge))
+
+```
+
 -   ***Question 7***. Do the same for the lasso model. What is the minimum MSE? What is the value of lambda associated with this MSE minimum?
+
+```{r}
+#Lasso model stats
+# minimum MSE
+min_lasso <- min(lasso_cv$cvm) 
+print(paste("The minimum mean squared error for the lasso regression is",min_lasso))
+# lambda for this min MSE
+lam_lasso <- lasso_cv$lambda.min 
+print(paste("The lambda value for the minimum mean squared error for the lasso regression is",lam_lasso))
+```
 
 Data scientists often use the "one-standard-error" rule when tuning lambda to select the best model. This rule tells us to pick the most parsimonious model (fewest number of predictors) while still remaining within one standard error of the overall minimum cross validation error. The cv.glmnet() model object has a column that automatically finds the value of lambda associated with the model that produces an MSE that is one standard error from the MSE minimum (\$lambda.1se).
 
 -   ***Question 8.*** Find the number of predictors associated with this model (hint: the \$nzero is the \# of predictors column).
 
+There are ten predictors associated with each regressions most parsimonious model.
+
+```{r}
+#For the ridge model:
+# No. of coef | 1-SE MSE
+ridge_cv$nzero[ridge_cv$lambda == ridge_cv$lambda.min]
+
+#For the lasso model:
+# No. of coef | 1-SE MSE
+lasso_cv$nzero[lasso_cv$lambda == lasso_cv$lambda.min]
+```
+
 -   ***Question 9*****.** Which regularized regression worked better for this task, ridge or lasso? Explain your answer.
+
+The ridge regression worked better for this model. My understanding is that the lasso regression is better for performing feature selection and the ridge regression is better for lowering the overall coefficients. Since the number of features associated with "one-standard-error" MSE was the same for both models and the MSE values were basically the same, our coefficients are going to be smaller in the ridge regression.
