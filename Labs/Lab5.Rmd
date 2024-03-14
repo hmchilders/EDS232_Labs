@@ -1,0 +1,461 @@
+---
+title: "Lab5"
+author: "Heather Childers"
+date: "2023-02-07"
+output: html_document
+---
+
+This week's lab is a musical lab. You'll be requesting data from the Spotify API and using it to build k-nearest neighbor and decision tree models.
+
+In order to use the Spotify API you must have a Spotify account. If you don't have one, sign up for a free one here: <https://www.spotify.com/us/signup>
+
+Once you have an account, go to Spotify for developers (<https://developer.spotify.com/>) and log in. Click the green "Create a Client ID" button to fill out the form to create an app create an app so you can access the API.
+
+On your developer dashboard page, click on the new app you just created. Go to Settings -\> Basic Information and you will find your Client ID . Click "View client secret" to access your secondary Client ID. Scroll down to Redirect URIs and enter: <http://localhost:1410/>
+
+You have two options for completing this lab.
+
+**Option 2: Classify by genres.** Build models that predict which genre a song belongs to. This will use a pre-existing Spotify dataset available from Kaggle.com (<https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>)
+
+```{r}
+library(spotifyr)
+library(tidyverse)
+library(tidymodels)
+library(rsample)
+library(recipes)
+library(caret)
+library(vip)
+library(rpart)
+library(ipred)
+library(doParallel)
+library(foreach) 
+library(ranger)
+library(rpart.plot)
+library(kableExtra)
+```
+
+Client ID and Client Secret are required to create and access token that is required to interact with the API. You can set them as system values so we don't have to do provide them each time.
+
+**Option 2: Data preparation**
+
+Download the Spotify dataset from <https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>
+
+Inspect the data. Choose two genres you'd like to use for the classification task. Filter down the data to include only the tracks of that genre.
+
+```{r}
+#Grab the .csv from here:
+#https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify
+kaggle_dat <- read_csv("genres_v2.csv")
+unique(kaggle_dat$genre)
+table(kaggle_dat$genre)
+
+#Removing inappropriate columns and selecting trap and pop as the two genres here and making case consistent
+genre_dat <- kaggle_dat %>%
+  select(-c(type, uri, track_href, analysis_url, `Unnamed: 0`, title, tempo, id, song_name)) %>%
+  filter(genre == "Pop"|genre == "trap") %>%
+  mutate(genre = str_replace(genre, "Pop", "pop")) %>%
+  mutate(genre = as.factor(genre))
+```
+
+**Option 2: Data preparation**
+
+Download the Spotify dataset from <https://www.kaggle.com/datasets/mrmorj/dataset-of-songs-in-spotify>
+
+Inspect the data. Choose two genres you'd like to use for the classification task. Filter down the data to include only the tracks of that genre.
+
+**Data Exploration (both options)**
+
+Let's take a look at your data. Do some exploratory summary stats and visualization.
+
+For example: What are the most danceable tracks in your dataset? What are some differences in the data between users (Option 1) or genres (Option 2)?
+
+Pop tracks are generally more danceable than trap music, and pop tracks are generally in a higher key which makes sense because the pop genre probably has more female artists.
+
+```{r}
+## Insert Data Viz here
+#Dancability
+ggplot(data = genre_dat, aes(x = danceability))+
+  geom_boxplot(aes(color = genre))
+#Song Length
+ggplot(data = genre_dat, aes(x = key))+
+  geom_boxplot(aes(color = genre))
+#Duration
+ggplot(data = genre_dat, aes(x = duration_ms))+
+  geom_boxplot(aes(color = genre))
+
+```
+
+### **Modeling**
+
+Create competing models that predict whether a track belongs to the pop or trap genre
+
+You will eventually create four final candidate models:
+
+Preprocessing. You can use the same recipe for all the models you create.
+
+```{r}
+set.seed(808)
+#initial split of data, default 75/25
+genre_split <- initial_split(genre_dat)
+genre_test <- testing(genre_split)
+genre_train <- training(genre_split)
+
+#Preprocess the data
+genre_rec <- recipe(genre ~., data = genre_train) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) %>%
+  step_normalize(all_numeric(), -all_outcomes(),)
+
+```
+
+1.  k-nearest neighbor (Week 5)
+
+```{r}
+#Specify the k-nearest neighbor model
+knn_spec <- nearest_neighbor(neighbors = 5) %>%
+  set_engine("kknn") %>%
+  set_mode("classification")
+
+knn_fit <- knn_spec %>%
+  fit(genre ~. , data = genre_train)
+
+set.seed(808)
+# 5-fold CV on the training dataset (instead of 10 for in-class demo)
+cv_folds <- genre_train %>% vfold_cv(v=5)
+
+# Create a workflow
+knn_workflow <- workflow() %>%
+  add_model(knn_spec) %>%
+  add_recipe(genre_rec)
+
+#Resample and cross-validate
+knn_res <- 
+  knn_workflow %>%
+  fit_resamples(
+    resamples= cv_folds,
+    control = control_resamples(save_pred = T)
+  )
+
+#check the performance
+knn_res %>% collect_metrics()
+#---------------------------------------------------
+#
+#---------------------------------------------------
+#Tune the model
+knn_spec_tune <- 
+  nearest_neighbor(neighbors = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("kknn")
+
+#Use the tuned parameter to make a new workflow
+wf_knn_tune <- workflow() %>%
+  add_model(knn_spec_tune) %>%
+  add_recipe(genre_rec)
+
+# Fit the workflow on our predefined folds and a grid of hyperparameters
+fit_knn_cv <- 
+  wf_knn_tune %>%
+  tune_grid(
+    cv_folds,
+    grid = data.frame(neighbors = c(1,5,seq(10,100, 10)))
+  )
+
+# Check the performance with collect_metrics()
+fit_knn_cv %>% collect_metrics()
+
+#---------------------------------------------------------
+
+# The final workflow for our KNN model. Finalize_workflow takes a workflow and a set of parameters.  In this case, that set is just the best value of k
+final_wf <- wf_knn_tune %>%
+  finalize_workflow(select_best(fit_knn_cv, metric= "accuracy"))
+
+# Check out the final workflow object.  Choosing accuracy for interpretability in this simple binary context
+final_wf
+
+# Fitting our final workflow
+final_fit <- final_wf %>% fit(data = genre_train)
+# Examine the final workflow
+final_fit
+```
+
+1.  decision tree (Week 5)
+
+```{r}
+tree_spec_fixed <- decision_tree(
+  cost_complexity = 0.1,
+  tree_depth = 4,
+  min_n = 11
+) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+#new spec, tell the model that we are tuning hyperparams
+tree_spec_tune <- decision_tree(
+  cost_complexity = tune(),
+  tree_depth = tune(),
+  min_n = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+tree_spec_tune
+
+tree_grid <- grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 5)
+tree_grid
+wf_tree_tune <- workflow() %>%
+  add_recipe(genre_rec) %>%
+    add_model(tree_spec_tune)
+
+#set up k-fold cv. This can be used for all the algorithms
+genre_cv = genre_train %>% vfold_cv(v = 10)
+genre_cv
+
+tree_rs <- tune_grid(
+  tree_spec_tune,
+  genre ~., 
+  resamples = genre_cv,
+    grid = tree_grid,
+  metrics = metric_set(accuracy)
+)
+tree_rs
+
+autoplot(tree_rs) + theme_light()
+show_best(tree_rs)
+select_best(tree_rs)
+
+
+final_tree <- finalize_model(tree_spec_tune, select_best(tree_rs))
+final_tree
+
+#similar functions here.
+final_tree_fit <- fit(final_tree, genre~.,genre_train)
+#last_fit() fits on training data (like fit()), but then also evaluates on the test data.
+final_tree_result <- last_fit(final_tree, genre~., genre_split )
+final_tree_result$.predictions 
+
+final_tree_fit %>%
+  vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
+  scale_y_continuous(expand = c(0,0))
+#---------------------------------
+genre_tree1 <- rpart(
+  formula = genre ~ .,
+  data    = genre_train,
+  method  = "anova"
+)
+rpart.plot(genre_tree1)
+plotcp(genre_tree1)
+
+# caret cross validation results
+genre_tree2 <- train(
+  genre ~ .,
+  data = genre_train,
+  method = "rpart",
+  trControl = trainControl(method = "cv", number = 10),
+  tuneLength = 20
+)
+
+ggplot(genre_tree2)
+
+
+vip(genre_tree2, num_features = 10)
+```
+
+1.  bagged tree (Week 6)
+    -   bag_tree()
+    -   Use the "times =" argument when setting the engine during model specification to specify the number of trees. The rule of thumb is that 50-500 trees is usually sufficient. The bottom of that range should be sufficient here.
+
+```{r}
+# train bagged model
+bag_tree <- bagging(
+  formula = genre ~ .,
+  data = genre_train,
+  nbagg = 50,  
+  coob = TRUE,
+  control = rpart.control(minsplit = 2, cp = 0)
+)
+
+bag2 <- train(
+  genre ~ .,
+  data = genre_train,
+  method = "treebag",
+  trControl = trainControl(method = "cv", number = 10),
+  nbagg = 50,  
+  control = rpart.control(minsplit = 2, cp = 0)
+)
+
+bag2
+
+# Fit trees in parallel and compute predictions on the test set
+predictions <- foreach(
+  icount(160), 
+  .packages = "rpart", 
+  .combine = cbind
+  ) %dopar% {
+    # bootstrap copy of training data
+    index <- sample(nrow(genre_train), replace = TRUE)
+    genre_train_boot <- genre_train[index, ]  
+  
+    # fit tree to bootstrap copy
+    bagged_tree <- rpart(
+      genre ~ ., 
+      control = rpart.control(minsplit = 2, cp = 0),
+      data = genre_train_boot
+      ) 
+    
+    predict(bagged_tree, newdata = genre_test)
+  }
+
+vip::vip(bag2, num_features = 10)
+```
+
+1.  random forest (Week 6)
+    -   rand_forest()
+    -   m_try() is the new hyperparameter of interest for this type of model. Make sure to include it in your tuning process
+
+```{r}
+# number of features
+n_features <- length(setdiff(names(genre_train), "genre"))
+
+# train a default random forest model
+genre_rf1 <- ranger(
+  genre ~ ., 
+  data = genre_train,
+  mtry = floor(n_features / 3),
+  respect.unordered.factors = "order",
+  seed = 808
+)
+
+# get OOB RMSE
+(default_rmse <- sqrt(genre_rf1$prediction.error))
+# [1] 0.2024597
+
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  mtry = floor(n_features * c(.05, .15, .25, .333, .4)),
+  min.node.size = c(1, 3, 5, 10), 
+  replace = c(TRUE, FALSE),                               
+  sample.fraction = c(.5, .63, .8),                       
+  rmse = NA                                               
+)
+
+for(i in seq_len(nrow(hyper_grid))) {
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula         = genre ~ ., 
+    data            = genre_train, 
+    num.trees       = n_features * 10,
+    mtry            = hyper_grid$mtry[i],
+    min.node.size   = hyper_grid$min.node.size[i],
+    replace         = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose         = FALSE,
+    seed            = 808,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error 
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error)
+}
+
+# assess top 10 models
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse) / default_rmse * 100) %>%
+  head(10)
+
+# run model with impurity-based variable importance
+rf_impurity <- ranger(
+  formula = genre ~ ., 
+  data = genre_train, 
+  num.trees = 2000,
+  mtry = 4,
+  min.node.size = 1,
+  sample.fraction = .80,
+  replace = FALSE,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed  = 808
+)
+
+# re-run model with permutation-based variable importance
+rf_permutation <- ranger(
+  formula = genre ~ ., 
+  data = genre_train, 
+  num.trees = 2000,
+  mtry = 4,
+  min.node.size = 1,
+  sample.fraction = .80,
+  replace = FALSE,
+  importance = "permutation",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed  = 808
+)
+
+rf_impurity
+rf_permutation 
+
+p1 <- vip::vip(rf_impurity, num_features = 10)
+p2 <- vip::vip(rf_permutation, num_features = 10)
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+
+```
+
+```{r}
+rf_model = rand_forest(mtry = tune(), trees = tune()) %>% #set random forest model to tune number of trees and number of predictors sampled
+  set_engine("ranger") %>% #use ranger engine
+  set_mode("classification") #set classification as mode
+
+rf_workflow = workflow() %>% #create workflow
+  add_model(rf_model) %>% #add random forest model
+  add_recipe(genre_rec) #add recipe
+
+rf_workflow
+
+cv_folds = vfold_cv(genre_train, v = 5)
+
+rf_cv_tune = rf_workflow %>%
+ tune_grid(resamples = cv_folds, grid = 10) #use cross validation to tune mtry and trees parameters
+
+collect_metrics(rf_cv_tune) #get metrics from tuning cv to pick best model
+
+autoplot(rf_cv_tune) + #plot cv results for parameter tuning
+  theme_bw()
+
+rf_best = show_best(rf_cv_tune, n = 1, metric = "roc_auc") #get metrics for best random forest model
+
+rf_final = finalize_workflow(rf_workflow, select_best(rf_cv_tune, metric = "roc_auc")) #finalize random forest model with best parameters
+
+train_fit_rf = fit(rf_final, genre_train) #fit the RF model to the training set
+
+test_predict_rf = predict(train_fit_rf, genre_test) %>% #get prediction probabilities for test 
+  bind_cols(genre_test) %>%  #bind to testing column
+  mutate(genre = as.factor(genre))
+
+test_predict2_rf = predict(train_fit_rf, genre_test, type = "prob") %>% #get testing prediction
+  bind_cols(genre_test) %>%  #bind to testing column
+  mutate(genre = as.factor(genre))
+
+accuracy(test_predict_rf, truth = genre, estimate = .pred_class) #get accuracy of testing prediction
+
+m1 = test_predict_rf %>% 
+  conf_mat(truth = genre, estimate = .pred_class) %>% #create confusion matrix
+  autoplot(type = "heatmap") + #plot confusion matrix with heatmap
+  theme_bw() + #change theme
+  theme(axis.text.x = element_text(angle = 30, hjust=1)) +
+  #rotate axis labels
+  labs(title = "Random Forest")
+
+```
+
+The random forests model was the most accurate model of the four models tested.
+
+```{r}
+df <- data.frame(
+  type = c("KNN", "Decision Tree", "Bagging", "Random Forests"),
+  accuracy = c(0.9458623, 0.9381237, 0.9555355, 0.9663573)
+)
+
+kable(df)
+```
+
+Use appropriate performance evaluation metric(s) for this classification task. A table would be a good way to display your comparison. Use at least one visualization illustrating your model results.
