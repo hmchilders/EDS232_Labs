@@ -1,0 +1,131 @@
+---
+title: "Lab9_hmchilders"
+output: html_document
+date: "2024-03-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE}
+library(tidyverse)
+library(ranger)
+library(tidymodels)
+```
+
+## Explore the Data
+
+```{r, message = FALSE}
+train_dat <- read_csv("Final_Data/train.csv") %>% 
+  select(-...13) %>% 
+  select(-id)
+test_dat <- read_csv("Final_Data/test.csv")
+
+split <- initial_split(train_dat, prop = 0.8)
+train <- training(split)
+test <- testing(split)
+
+```
+
+## Choose a Model
+
+There were a few models that wouldn't work well for this experiment. We know that we need to use a regression model, and not a classification model so only the following options will work for this experiment:
+
+-   Linear Regression
+
+-   Decision Trees
+
+-   Bagging
+
+-   Random Forest
+
+-   Gradient Boosting
+
+-   Support Vector Machines
+
+-   Neural Networks
+
+Since we don't expect there to be a linear relationship between the variables, we've removed the linear regression models from the list of available options. Since SVM is better for binary data, we removed it from the list of available options. We were not able to get Neural networks working during class, so we decided to also remove that from the list. That leaves us with the following list:
+
+-   Decision Trees
+
+-   Bagging
+
+-   Random Forest
+
+-   Gradient Boosting
+
+We removed Decision trees because they are prone to over fitting. We removed Gradient Boosting because the models are too computationally intensive for us to run the model on the kaggle site reliably. We also decided to choose the Random Forest Model over the Bagged Trees model because the RF model builds a large collection of de-correlated trees.
+
+#### Random Forest Regression
+
+We will be using the ranger engine for the RF model, and we will be tuning the mtry and trees parameters. mtry is the number of predictors that will be randomly sampled for use in each of the trees created. trees is the number of tress that the model creates.
+
+## Pre-processing the Data
+
+Build a recipe to normalize the numeric predictors.
+
+```{r}
+rf_recipe = recipe(DIC ~ ., data = train) %>% #create model recipe
+  step_normalize(all_numeric_predictors()) #normalize all numeric predictors
+
+```
+
+Build the model using the ranger engine and use the tune() function to tune the hyperparameters. Then combine the recipe and the model into a workflow.
+
+```{r}
+rf_model <- rand_forest(mtry = tune(), trees = tune()) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_workflow = workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(rf_recipe)
+
+rf_workflow
+```
+
+## Tune Relevant Parameters (cross-validation)
+
+After creating my workflow for my random forest model, I will be using `tune_grid()` to get 10 possible values for both mtry and trees parameters and using cross validation to fit the model to the folds in order to determine the best value for the parameters.
+
+```{r, eval = FALSE}
+cv_folds = vfold_cv(train, v = 10)
+
+rf_cv_tune = rf_workflow %>%
+  tune_grid(resamples = cv_folds, grid = 10) #use cross validation to tune mtry and trees parameters
+```
+
+Below are the results of the random forest cross validation tuning the mtry and trees parameters.
+
+```{r}
+collect_metrics(rf_cv_tune) #get metrics from tuning cv to pick best model
+```
+
+#### Finalize workflow
+
+Use the show_best() function to select the best model
+
+```{r}
+rf_best = show_best(rf_cv_tune, n = 1, metric = "rmse") #get metrics for best random forest model
+rf_best
+```
+
+Fit the model to the training data
+
+```{r}
+rf_final = finalize_workflow(rf_workflow, select_best(rf_cv_tune, metric = "rmse"))
+
+train_fit_rf = fit(rf_final, train) #fit the RF model to the training set
+
+train_fit_rf
+```
+
+Use the fit model on the testing dataset to predict the DIC for each model.
+
+```{r}
+test_predict_rf = predict(train_fit_rf, test) %>%
+  #get testing prediction
+  bind_cols(test) #bind to testing column
+```
