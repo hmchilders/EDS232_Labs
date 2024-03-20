@@ -1,27 +1,48 @@
 ---
-title: "Lab9_hmchilders"
+title: "Kaggle Competition: Team INSERT CUTE TEAM-NAME"
+author: "Heather Childers & Sofia Ingersoll"
 output: html_document
-date: "2024-03-14"
+date: "2024-03-20"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
 ```
 
 ```{r, message = FALSE}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                         System Set Up                                ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 library(tidyverse)
 library(ranger)
 library(tidymodels)
+library(doParallel) 
+library(yardstick)
+
+set.seed(99)           # set random seed
 ```
 
 ## Explore the Data
 
-```{r, message = FALSE}
-train_dat <- read_csv("Final_Data/train.csv") %>% 
+```{r}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                         Load Data                                    ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+train_dat <- read_csv("Final_Data/train.csv",
+                       show_col_types = FALSE) %>% 
   select(-...13) %>% 
   select(-id)
-test_dat <- read_csv("Final_Data/test.csv")
 
+test_dat <- read_csv("Final_Data/test.csv", 
+                     show_col_types = FALSE)
+
+# commented out for rendering, but exploration of data
+#str(train_dat)
+#str(test_dat)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                         Split Data                                   ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 split <- initial_split(train_dat, prop = 0.8)
 train <- training(split)
 test <- testing(split)
@@ -67,7 +88,11 @@ We will be using the ranger engine for the RF model, and we will be tuning the m
 Build a recipe to normalize the numeric predictors.
 
 ```{r}
-rf_recipe = recipe(DIC ~ ., data = train) %>% #create model recipe
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                      Prep Data for Models                            ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+rf_recipe = recipe(DIC ~ .,
+                   data = train) %>% #create model recipe
   step_normalize(all_numeric_predictors()) #normalize all numeric predictors
 
 ```
@@ -75,10 +100,17 @@ rf_recipe = recipe(DIC ~ ., data = train) %>% #create model recipe
 Build the model using the ranger engine and use the tune() function to tune the hyperparameters. Then combine the recipe and the model into a workflow.
 
 ```{r}
-rf_model <- rand_forest(mtry = tune(), trees = tune()) %>% 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----               Tuning for mtry and number of trees                    ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+rf_model <- rand_forest(mtry = tune(),
+                        trees = tune()) %>% 
   set_engine("ranger") %>% 
   set_mode("regression")
 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                           Workflow                                   ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 rf_workflow = workflow() %>% 
   add_model(rf_model) %>% 
   add_recipe(rf_recipe)
@@ -91,15 +123,34 @@ rf_workflow
 After creating my workflow for my random forest model, I will be using `tune_grid()` to get 10 possible values for both mtry and trees parameters and using cross validation to fit the model to the folds in order to determine the best value for the parameters.
 
 ```{r, eval = FALSE}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                       Cross Val Folds                                ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 cv_folds = vfold_cv(train, v = 10)
 
-rf_cv_tune = rf_workflow %>%
-  tune_grid(resamples = cv_folds, grid = 10) #use cross validation to tune mtry and trees parameters
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                     RF Cross Validation                              ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# use cross validation to tune mtry and trees parameters
+# in parallel, tune grid params 
+doParallel::registerDoParallel() 
+
+system.time(
+  rf_cv_tune <- tune_grid(
+    rf_workflow,
+    resamples = cv_folds,
+    grid = 10         
+  )
+)
 ```
 
 Below are the results of the random forest cross validation tuning the mtry and trees parameters.
 
 ```{r}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                     Collect Metrics                                  ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 collect_metrics(rf_cv_tune) #get metrics from tuning cv to pick best model
 ```
 
@@ -108,13 +159,19 @@ collect_metrics(rf_cv_tune) #get metrics from tuning cv to pick best model
 Use the show_best() function to select the best model
 
 ```{r}
-rf_best = show_best(rf_cv_tune, n = 1, metric = "rmse") #get metrics for best random forest model
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                         Finalize Workflow                            ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+rf_best = show_best(rf_cv_tune, n = 1, metric = "rmse") # get metrics for best random forest model
 rf_best
 ```
 
 Fit the model to the training data
 
 ```{r}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                             Fit Model                                ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 rf_final = finalize_workflow(rf_workflow, select_best(rf_cv_tune, metric = "rmse"))
 
 train_fit_rf = fit(rf_final, train) #fit the RF model to the training set
@@ -125,7 +182,12 @@ train_fit_rf
 Use the fit model on the testing dataset to predict the DIC for each model.
 
 ```{r}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# ----                      Bind Predictions                                ----
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 test_predict_rf = predict(train_fit_rf, test) %>%
   #get testing prediction
   bind_cols(test) #bind to testing column
 ```
+
+
