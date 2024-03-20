@@ -18,6 +18,7 @@ library(ranger)
 library(tidymodels)
 library(doParallel) 
 library(yardstick)
+library(here)
 
 set.seed(99)           # set random seed
 ```
@@ -31,14 +32,18 @@ set.seed(99)           # set random seed
 train_dat <- read_csv("Final_Data/train.csv",
                        show_col_types = FALSE) %>% 
   select(-...13) %>% 
-  select(-id)
+
+  rename(TA1 = TA1.x)
 
 test_dat <- read_csv("Final_Data/test.csv", 
-                     show_col_types = FALSE)
+                     show_col_types = FALSE) 
+
+test_dat$DIC <- NA
 
 # commented out for rendering, but exploration of data
 #str(train_dat)
 #str(test_dat)
+#setdiff(train_dat, test_dat)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ----                         Split Data                                   ----
@@ -185,9 +190,14 @@ Use the fit model on the testing dataset to predict the DIC for each model.
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ----                      Bind Predictions                                ----
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-test_predict_rf = predict(train_fit_rf, test) %>%
+test_predict_rf = predict(train_fit_rf, test_dat) %>%
   #get testing prediction
-  bind_cols(test) #bind to testing column
+  bind_cols(test_dat) %>%  #bind to testing column
+  select(id, .pred)
+
+write.csv(test_predict_rf, here("predictions/carbon_queens_predictions.csv"))
 ```
+
+
 
 
